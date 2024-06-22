@@ -28,6 +28,27 @@ impl Mean {
     }
 }
 
+struct StationData {
+    min: num,
+    max: num,
+    mean: Mean,
+}
+
+impl StationData {
+    fn new(value: num) -> Self {
+        Self {
+            min: value,
+            max: value,
+            mean: Mean::new(value),
+        }
+    }
+    fn update(&mut self, value: num) {
+        self.min = num::min(self.min, value);
+        self.max = num::max(self.max, value);
+        self.mean.update(value);
+    }
+}
+
 #[test]
 fn test_mean() {
     let mut mean = Mean::new(0.0);
@@ -50,19 +71,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (tx, rx): (mpsc::Sender<(Vec<u8>, Vec<u8>)>, _) = mpsc::channel();
 
     let acumulator = thread::spawn(move || {
-        let mut all_stations: HashMap<_, Mean> = HashMap::new();
+        let mut all_stations: HashMap<_, StationData> = HashMap::new();
 
         while let Ok((station_buf, temp_buf)) = rx.recv() {
             let temp_s = from_utf8(&temp_buf).unwrap().trim();
             let temp = temp_s.parse::<num>().unwrap();
-            let station = String::from(from_utf8(&station_buf).unwrap().trim_end_matches(';'));
+            let mut station = String::from(from_utf8(&station_buf).unwrap());
+            station.pop();
 
             match all_stations.entry(station) {
                 Entry::Occupied(ref mut s) => {
                     s.get_mut().update(temp);
                 }
                 Entry::Vacant(v) => {
-                    v.insert(Mean::new(temp));
+                    v.insert(StationData::new(temp));
                 }
             }
         }
@@ -86,7 +108,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     print!("{}", "{");
     for (k, v) in acumulator.join().unwrap() {
-        print!("{k}=0.0/0.0/{}, ", v.value);
+        print!("{k}={:.1}/{:.1}/{:.1}, ", v.min, v.max, v.mean.value);
     }
     print!("{}", "}");
 
