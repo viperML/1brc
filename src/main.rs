@@ -7,6 +7,7 @@ use std::{
     path::PathBuf,
     str::from_utf8,
     sync::mpsc,
+    thread,
 };
 
 type num = f64;
@@ -39,7 +40,6 @@ fn test_mean() {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-
     let mut args = env::args();
 
     args.next();
@@ -47,42 +47,46 @@ fn main() -> Result<(), Box<dyn Error>> {
     let file = File::options().read(true).open(&path).unwrap();
     let mut reader = BufReader::new(file);
 
-    let mut all_stations: HashMap<_, Mean> = HashMap::new();
+    let (tx, rx): (mpsc::Sender<(Vec<u8>, Vec<u8>)>, _) = mpsc::channel();
 
-    let mut station_buf = Vec::new();
-    let mut temp_buf = Vec::new();
+    let acumulator = thread::spawn(move || {
+        let mut all_stations: HashMap<_, Mean> = HashMap::new();
+
+        while let Ok((station_buf, temp_buf)) = rx.recv() {
+            let temp_s = from_utf8(&temp_buf).unwrap().trim();
+            let temp = temp_s.parse::<num>().unwrap();
+            let station = String::from(from_utf8(&station_buf).unwrap().trim_end_matches(';'));
+
+            match all_stations.entry(station) {
+                Entry::Occupied(ref mut s) => {
+                    s.get_mut().update(temp);
+                }
+                Entry::Vacant(v) => {
+                    v.insert(Mean::new(temp));
+                }
+            }
+        }
+
+        all_stations
+    });
+
     loop {
-        temp_buf.clear();
-        station_buf.clear();
+        let mut station_buf = Vec::new();
+        let mut temp_buf = Vec::new();
         if reader.read_until(b';', &mut station_buf)? == 0 {
             break;
         }
         if reader.read_until(b'\n', &mut temp_buf)? == 0 {
             break;
         }
-
-        let s = from_utf8(&temp_buf)?.trim();
-        #[cfg(debug_assertions)]
-        eprintln!("s={:?}", s);
-        let temp = s.parse::<num>()?;
-        #[cfg(debug_assertions)]
-        eprintln!("{:x?} -> {temp:?}", station_buf);
-
-        match all_stations.entry(station_buf.clone()) {
-            Entry::Occupied(ref mut s) => {
-                s.get_mut().update(temp);
-            }
-            Entry::Vacant(v) => {
-                v.insert(Mean::new(temp));
-            }
-        }
+        tx.send((station_buf, temp_buf))?;
     }
     eprintln!("DONE");
+    drop(tx);
 
     print!("{}", "{");
-    for (k, v) in all_stations {
-        let name = from_utf8(&k)?.replace(";", "");
-        print!("{name}=0.0/0.0/{}, ", v.value);
+    for (k, v) in acumulator.join().unwrap() {
+        print!("{k}=0.0/0.0/{}, ", v.value);
     }
     print!("{}", "}");
 
